@@ -1,6 +1,6 @@
 # stock management (items, count, database)
-# shopping cart (add item, remove item, checkout, api)
-# payment collection (stripe)
+# TODO: shopping cart (add item, remove item, checkout + remove from stock, api)
+# TODO: payment collection (stripe)
 import collections
 import sqlite3
 
@@ -69,7 +69,21 @@ class Stockist(object):
     @property
     def stock_ids(self):
         return self.stock.keys()
+
+    @property 
+    def last_stock_id(self):
+        try:
+            return self.stock.keys()[-1]
+        except IndexError:
+            return -1
     
+    @property
+    def last_stock_entry(self):
+        try:
+            return self.stock.values()[-1]
+        except IndexError:
+            return None
+
     @property
     def stock_count(self):
         return [
@@ -115,8 +129,8 @@ class Stockist(object):
             else:
                 raise StockError('Stock ID already in use!')
         item_data = self.create_item_data(new_id, item)
-        existing_items = self.name_id_map.setdefault(str(item), [])
-        existing_items.append((new_id, item_data['unique_name']))
+        existing_items = self.name_id_map.setdefault(str(item), set())
+        existing_items.add((new_id, item_data['unique_name']))
         self.stock[new_id] = item_data
         return new_id
 
@@ -128,18 +142,19 @@ class Stockist(object):
 
     def last_stock_id_for_item(self, item):
         try:
-            return self.stock_ids_for_item(item)[-1]
+            return sorted(self.stock_ids_for_item(item))[-1]
         except IndexError:
             return None
 
     def last_stock_entry_for_item(self, item):
         return self.stock.get(self.last_stock_id_for_item(item), None)
 
-    def stock_item(self, item, amount=1, create=False):
-        if not self.item_stocked(item) or create:
-            item_id = self.new_stock_item(item)
-        else:
-            item_id = self.last_stock_id_for_item(item)
+    def stock_item(self, item=None, item_id=None, amount=1, create=False):
+        if item is not None:
+            if create or not self.item_stocked(item):
+                item_id = self.new_stock_item(item, item_id)
+            elif item_id is None:
+                item_id = self.last_stock_id_for_item(item)
         self.increase_stock(item_id, amount)
         return item_id
 
@@ -154,7 +169,7 @@ class SQLiteStockist(Stockist):
 
     def __init__(self, database_url=None):
         super(SQLiteStockist, self).__init__()
-        self.connection = sqlite3.connect(database_url) if database_url else None
+        self.connection = database_url
         self.memcon = sqlite3.connect(':memory:')
 
     @staticmethod
@@ -162,29 +177,68 @@ class SQLiteStockist(Stockist):
         cur.execute("SELECT {0} FROM {1};".format(what, table_name))
         return cur.fetchall()
 
-    def retrieve_stock_from_db(self):
-        try:
-            with self.connection:
-            
-                # ensure column names can be used
-                self.connection.row_factory = sqlite3.Row
-                cur = self.connection.cursor()
-                stock_data = {
-                    row['pk']: {
-                        'stock_id': row['pk'],
-                        'unique_name': row['name'],
-                        'item': None,
-                        'count': row['count'],
-                    }
-                    for row in self.select(cur, self.STOCK_TABLE)
+    @property
+    def database_stock(self):
+        with self.connection:
+            self.connection.row_factory = sqlite3.Row
+            cur = self.connection.cursor()
+            return {
+                row['pk']: {
+                    'stock_id': row['pk'],
+                    'unique_name': row['name'],
+                    'item': None,
+                    'count': row['count'],
                 }
-                for data in stock_data.values():
-                    item_name, stock_id = data['unique_name'].split('_#')
-                    existing_items = self.name_id_map.setdefault(item_name, [])
-                    existing_items.append((stock_id, data['unique_name']))
-                self.stock.update(stock_data)                    
-        except AttributeError:
+                for row in self.select(cur, self.STOCK_TABLE)
+            }
+
+    def retrieve_stock_from_db(self, force=False):
+        if force or self.missing_stock_from_database:
+            stock_data = self.database_stock
+            for data in stock_data.values():
+                item_name, _ = data['unique_name'].split('_#')
+                existing_items = self.name_id_map.setdefault(item_name, set())
+                existing_items.add((data['stock_id'], data['unique_name']))
+            self.stock.update(stock_data)
+
+    @property
+    def connection(self):
+        if self._connection is None:
             raise StockConnectionError('No database connection!')
+        return self._connection
+    
+    @connection.setter
+    def connection(self, value):
+        if isinstance(value, sqlite3.Connection):
+            self._connection = value
+        else:
+            self._connection = sqlite3.connect(value) if value is not None else None
+    
+    @property
+    def database_up_to_date(self):
+        with self.connection:
+            self.connection.row_factory = sqlite3.Row
+            cur = self.connection.cursor()
+            keys = [
+                row['pk'] 
+                for row in self.select(cur, self.STOCK_TABLE)
+            ]
+        if self.stock and not keys:
+            return False
+        return all(key in keys for key in self.stock.keys())
+
+    @property 
+    def missing_stock_from_database(self):
+        with self.connection:
+            self.connection.row_factory = sqlite3.Row
+            cur = self.connection.cursor()
+            keys = [
+                row['pk'] 
+                for row in self.select(cur, self.STOCK_TABLE)
+            ]
+        if keys and not self.stock:
+            return True
+        return not(all(key in self.stock.keys() for key in keys))
 
     def export_stock_to_sql(self):
         with self.memcon:
@@ -227,6 +281,32 @@ class SQLiteStockist(Stockist):
             connection.execute(
                 "CREATE TABLE {table}(pk INT, name TEXT, count INT)"
                 .format(table=self.STOCK_TABLE)
+            )
+            connection.commit()
+
+    def create_database(self):
+        with self.connection as connection:
+            connection.execute(
+                "CREATE TABLE {table}(pk INT, name TEXT, count INT)"
+                .format(table=self.STOCK_TABLE)
+            )
+            connection.commit()
+
+    def update_database(self, force=False):
+        if force:
+            entries = self.create_stock_entries()
+        else:
+            stock_data = self.database_stock
+            entries = [
+                self.create_stock_entry(key)
+                for key in self.stock.keys()
+                if key not in stock_data
+            ]
+        with self.connection as connection:
+            connection.executemany(
+                "INSERT INTO {table} VALUES(?, ?, ?)"
+                .format(table=self.STOCK_TABLE),
+                entries
             )
             connection.commit()
 
