@@ -254,29 +254,17 @@ class SQLiteStockist(Stockist):
 
     @property
     def is_database_up_to_date(self):
-        with self.connection:
-            self.connection.row_factory = sqlite3.Row
-            cur = self.connection.cursor()
-            keys = [
-                row['pk'] 
-                for row in self.select(cur, self.STOCK_TABLE)
-            ]
-        if self.stock and not keys:
+        stock_data = self.database_stock
+        if self.stock and not stock_data:
             return False
-        return all(key in keys for key in self.stock.keys())
+        return set(stock_data).issuperset(set(self.stock))
 
-    @property 
+    @property
     def is_missing_stock_from_database(self):
-        with self.connection:
-            self.connection.row_factory = sqlite3.Row
-            cur = self.connection.cursor()
-            keys = [
-                row['pk'] 
-                for row in self.select(cur, self.STOCK_TABLE)
-            ]
-        if keys and not self.stock:
+        stock_data = self.database_stock
+        if stock_data and not self.stock:
             return True
-        return not(all(key in self.stock.keys() for key in keys))
+        return bool(set(stock_data) - set(self.stock))
 
     def export_stock_to_sql(self):
         with self.memcon:
