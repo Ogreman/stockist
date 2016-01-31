@@ -19,20 +19,39 @@ class StockConnectionError(StockError):
 
 class Stockist(object):
 
-    def __init__(self):
-        self.name_id_map = collections.OrderedDict()
-        self.stock = collections.OrderedDict()
-        self.__lock_items = False
+    @property
+    def items_locked(self):
+        if not hasattr(self, '_lock_items'):
+            self._lock_items = False
+        return self._lock_items
 
+    @items_locked.setter 
+    def items_locked(self, value):
+        if not isinstance(value, bool):
+            raise ValueError
+        self._lock_items = value
+
+    @property 
+    def stock(self):
+        if not hasattr(self, '_stock'):
+            self._stock = collections.OrderedDict()
+        return self._stock
+
+    @property
+    def name_id_map(self):
+        if not hasattr(self, '_name_id_map'):
+            self._name_id_map = collections.OrderedDict()
+        return self._name_id_map
+    
     def lock_stock_list(self):
-        self.__lock_items = True
+        self.items_locked = True
 
     def unlock_stock_list(self):
-        self.__lock_items = False
+        self.items_locked = False
 
     @property
     def is_locked(self):
-        return self.__lock_items
+        return self.items_locked
 
     def stock_ids_for_item(self, item):
         return [stock_id for stock_id, _ in self.name_id_map.get(str(item), [])]
@@ -66,6 +85,12 @@ class Stockist(object):
             for stock_id in self.stock_ids_for_item(item_or_stock_id):
                 self.delete_stock_entry(stock_id)
 
+    def __contains__(self, item_or_stock_id):
+        if isinstance(item_or_stock_id, int):
+            return item_or_stock_id in self.stock
+        else:
+            return str(item_or_stock_id) in self.name_id_map
+
     @property
     def stock_ids(self):
         return self.stock.keys()
@@ -96,7 +121,6 @@ class Stockist(object):
         return {
             'stock_id': new_id,
             'unique_name': '%s_#%d' % (item, new_id),
-            'item': item,
             'count': count,
         }
 
@@ -112,10 +136,9 @@ class Stockist(object):
         if self.is_locked:
             raise StockLockedError
         data = self.stock[old_id]
-        mapping_list = self.name_id_map[str(data['item'])]
-        for index, mapping in enumerate(mapping_list):
-            if old_id in mapping:
-                mapping_list.pop(index)
+        unique_name = data['unique_name']
+        item_name, _ = unique_name.split('_#')
+        self.name_id_map[item_name].discard((old_id, unique_name))
         del self.stock[old_id]
 
     def new_stock_item(self, item, new_id=None, force=False):
@@ -169,8 +192,35 @@ class SQLiteStockist(Stockist):
 
     def __init__(self, database_url=None):
         super(SQLiteStockist, self).__init__()
-        self.connection = database_url
+        self.connection_url = database_url
+        self.connection = sqlite3.connect(database_url)
         self.memcon = sqlite3.connect(':memory:')
+    
+    @property
+    def connection(self):
+        if self._connection is None:
+            raise StockConnectionError('No database connection!')
+        return self._connection
+    
+    @connection.setter
+    def connection(self, value):
+        if isinstance(value, sqlite3.Connection):
+            self._connection = value
+        else:
+            self._connection = sqlite3.connect(value) if value is not None else None
+    
+    @property 
+    def memcon(self):
+        if self._memcon is None:
+            self._memcon = sqlite3.connect(':memory:')
+        return self._memcon
+
+    @memcon.setter
+    def memcon(self, value):
+        if isinstance(value, sqlite3.Connection):
+            self._memcon = value
+        else:
+            self._memcon = sqlite3.connect(value) if value is not None else None
 
     @staticmethod
     def select(cur, table_name, what="*"):
@@ -186,13 +236,14 @@ class SQLiteStockist(Stockist):
                 row['pk']: {
                     'stock_id': row['pk'],
                     'unique_name': row['name'],
-                    'item': None,
                     'count': row['count'],
                 }
                 for row in self.select(cur, self.STOCK_TABLE)
             }
 
-    def retrieve_stock_from_db(self, force=False):
+    def update_stock_from_db(self, force=False):
+        if self.is_locked:
+            raise StockLockedError
         if force or self.missing_stock_from_database:
             stock_data = self.database_stock
             for data in stock_data.values():
@@ -201,19 +252,6 @@ class SQLiteStockist(Stockist):
                 existing_items.add((data['stock_id'], data['unique_name']))
             self.stock.update(stock_data)
 
-    @property
-    def connection(self):
-        if self._connection is None:
-            raise StockConnectionError('No database connection!')
-        return self._connection
-    
-    @connection.setter
-    def connection(self, value):
-        if isinstance(value, sqlite3.Connection):
-            self._connection = value
-        else:
-            self._connection = sqlite3.connect(value) if value is not None else None
-    
     @property
     def database_up_to_date(self):
         with self.connection:
