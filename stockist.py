@@ -244,7 +244,7 @@ class SQLiteStockist(Stockist):
     def update_stock_from_db(self, force=False):
         if self.is_locked:
             raise StockLockedError
-        if force or self.missing_stock_from_database:
+        if force or self.is_missing_stock_from_database:
             stock_data = self.database_stock
             for data in stock_data.values():
                 item_name, _ = data['unique_name'].split('_#')
@@ -253,7 +253,7 @@ class SQLiteStockist(Stockist):
             self.stock.update(stock_data)
 
     @property
-    def database_up_to_date(self):
+    def is_database_up_to_date(self):
         with self.connection:
             self.connection.row_factory = sqlite3.Row
             cur = self.connection.cursor()
@@ -266,7 +266,7 @@ class SQLiteStockist(Stockist):
         return all(key in keys for key in self.stock.keys())
 
     @property 
-    def missing_stock_from_database(self):
+    def is_missing_stock_from_database(self):
         with self.connection:
             self.connection.row_factory = sqlite3.Row
             cur = self.connection.cursor()
