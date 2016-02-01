@@ -1,0 +1,1 @@
+# TODO: payment collection (stripe)

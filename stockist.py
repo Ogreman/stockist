@@ -1,8 +1,7 @@
 # stock management (items, count, database)
-# TODO: shopping cart (add item, remove item, checkout + remove from stock, api)
-# TODO: payment collection (stripe)
 import collections
 import sqlite3
+import psycopg2
 
 
 class StockError(Exception):
@@ -25,7 +24,7 @@ class Stockist(object):
             self._lock_items = False
         return self._lock_items
 
-    @items_locked.setter 
+    @items_locked.setter
     def items_locked(self, value):
         if not isinstance(value, bool):
             raise ValueError
@@ -185,61 +184,29 @@ class Stockist(object):
         self.stock[stock_id]['count'] += amount
 
 
-class SQLiteStockist(Stockist):
+class DatabaseStockist(Stockist):
 
     STOCK_TABLE = "stock"
+    CREATE_SQL_STRING = "CREATE TABLE {table}(pk INT, name TEXT, count INT)"
+    DROP_SQL_STRING = "DROP TABLE IF EXISTS {table}"
+    SELECT_SQL_STRING = "SELECT {what} FROM {table};"
+
     StockEntry = collections.namedtuple('StockEntry', ['pk', 'name', 'count'])
 
-    def __init__(self, database_url=None):
-        super(SQLiteStockist, self).__init__()
-        self.connection_url = database_url
-        self.connection = sqlite3.connect(database_url)
-        self.memcon = sqlite3.connect(':memory:')
-    
     @property
     def connection(self):
         if self._connection is None:
             raise StockConnectionError('No database connection!')
         return self._connection
-    
+
     @connection.setter
     def connection(self, value):
-        if isinstance(value, sqlite3.Connection):
-            self._connection = value
-        else:
-            self._connection = sqlite3.connect(value) if value is not None else None
-    
-    @property 
-    def memcon(self):
-        if self._memcon is None:
-            self._memcon = sqlite3.connect(':memory:')
-        return self._memcon
-
-    @memcon.setter
-    def memcon(self, value):
-        if isinstance(value, sqlite3.Connection):
-            self._memcon = value
-        else:
-            self._memcon = sqlite3.connect(value) if value is not None else None
+        raise NotImplemented
 
     @staticmethod
     def select(cur, table_name, what="*"):
-        cur.execute("SELECT {0} FROM {1};".format(what, table_name))
+        cur.execute(DatabaseStockist.SELECT_SQL_STRING.format(what=what, table=table_name))
         return cur.fetchall()
-
-    @property
-    def database_stock(self):
-        with self.connection:
-            self.connection.row_factory = sqlite3.Row
-            cur = self.connection.cursor()
-            return {
-                row['pk']: {
-                    'stock_id': row['pk'],
-                    'unique_name': row['name'],
-                    'count': row['count'],
-                }
-                for row in self.select(cur, self.STOCK_TABLE)
-            }
 
     def update_stock_from_db(self, force=False):
         if self.is_locked:
@@ -266,56 +233,28 @@ class SQLiteStockist(Stockist):
             return True
         return bool(set(stock_data) - set(self.stock))
 
-    def export_stock_to_sql(self):
-        with self.memcon:
-            cur = self.memcon.cursor()
-            cur.execute("DROP TABLE IF EXISTS {table}"
-                .format(table=self.STOCK_TABLE)
-            )
-            cur.execute(
-                "CREATE TABLE {table}(pk INT, name TEXT, count INT)"
-                .format(table=self.STOCK_TABLE)
-            )
-            cur.executemany(
-                "INSERT INTO {table} VALUES(?, ?, ?)"
-                .format(table=self.STOCK_TABLE),
-                self.create_stock_entries()
-            )
-            return '\n'.join(self.memcon.iterdump())
-
     def dump_stock_to_database(self):
         with self.connection as connection:
-            connection.execute("DROP TABLE IF EXISTS {table}"
-                .format(table=self.STOCK_TABLE)
-            )
-            connection.execute(
-                "CREATE TABLE {table}(pk INT, name TEXT, count INT)"
-                .format(table=self.STOCK_TABLE)
-            )
-            connection.executemany(
-                "INSERT INTO {table} VALUES(?, ?, ?)"
-                .format(table=self.STOCK_TABLE),
+            cur = connection.cursor()
+            cur.execute(self.DROP_SQL_STRING.format(table=self.STOCK_TABLE))
+            cur.execute(self.CREATE_SQL_STRING.format(table=self.STOCK_TABLE))
+            cur.executemany(
+                self.INSERT_SQL_STRING.format(table=self.STOCK_TABLE),
                 self.create_stock_entries()
             )
             connection.commit()
 
     def reset_database(self):
         with self.connection as connection:
-            connection.execute("DROP TABLE IF EXISTS {table}"
-                .format(table=self.STOCK_TABLE)
-            )
-            connection.execute(
-                "CREATE TABLE {table}(pk INT, name TEXT, count INT)"
-                .format(table=self.STOCK_TABLE)
-            )
+            cur = connection.cursor()
+            cur.execute(self.DROP_SQL_STRING.format(table=self.STOCK_TABLE))
+            cur.execute(self.CREATE_SQL_STRING.format(table=self.STOCK_TABLE))
             connection.commit()
 
     def create_database(self):
         with self.connection as connection:
-            connection.execute(
-                "CREATE TABLE {table}(pk INT, name TEXT, count INT)"
-                .format(table=self.STOCK_TABLE)
-            )
+            cur = connection.cursor()
+            cur.execute(self.CREATE_SQL_STRING.format(table=self.STOCK_TABLE))
             connection.commit()
 
     def update_database(self, force=False):
@@ -329,9 +268,9 @@ class SQLiteStockist(Stockist):
                 if key not in stock_data
             ]
         with self.connection as connection:
-            connection.executemany(
-                "INSERT INTO {table} VALUES(?, ?, ?)"
-                .format(table=self.STOCK_TABLE),
+            cur = connection.cursor()
+            cur.executemany(
+                self.INSERT_SQL_STRING.format(table=self.STOCK_TABLE),
                 entries
             )
             connection.commit()
@@ -354,49 +293,129 @@ class SQLiteStockist(Stockist):
         ]
 
     def new_stock_item(self, item, new_id=None, force=False, update_db=True):
-        new_id = super(SQLiteStockist, self).new_stock_item(item, new_id, force)
+        new_id = super(DatabaseStockist, self).new_stock_item(item, new_id, force)
         if update_db:
             with self.connection as connection:
-                connection.execute(
-                    "INSERT INTO {table} VALUES(?, ?, ?)"
-                    .format(table=self.STOCK_TABLE),
+                cur = connection.cursor()
+                cur.execute(
+                    self.INSERT_SQL_STRING.format(table=self.STOCK_TABLE),
                     self.create_stock_entry(new_id)
                 )
                 connection.commit()
         return new_id
 
     def delete_stock_entry(self, old_id, update_db=True):
-        super(SQLiteStockist, self).delete_stock_entry(old_id)
+        super(DatabaseStockist, self).delete_stock_entry(old_id)
         if update_db:
             with self.connection as connection:
-                connection.execute(
-                    "DELETE FROM {table} WHERE pk={id}"
-                    .format(
-                        table=self.STOCK_TABLE, 
-                        id=old_id
-                    )
+                cur = connection.cursor()
+                cur.execute(
+                    self.DELETE_SQL_STRING.format(table=self.STOCK_TABLE), 
+                    (old_id,)
                 )
                 connection.commit()
 
     def increase_stock(self, stock_id, amount=1, update_db=True):
-        super(SQLiteStockist, self).increase_stock(stock_id, amount)
+        super(DatabaseStockist, self).increase_stock(stock_id, amount)
         if update_db:
+            print "trying..."
             with self.connection as connection:
-                connection.execute(
-                    "UPDATE {table} set count={amount} where pk={id}"
-                    .format(
-                        table=self.STOCK_TABLE,
-                        id=stock_id,
-                        amount=self.stock[stock_id]['count']
-                    )
+                cur = connection.cursor()
+                cur.execute(
+                    self.UPDATE_SQL_STRING.format(table=self.STOCK_TABLE),
+                    (self.stock[stock_id]['count'], stock_id)
                 )
                 connection.commit()
 
+    @property
+    def database_stock(self):
+        with self.connection:
+            cur = self.connection.cursor()
+            return {
+                stock_id: {
+                    'stock_id': stock_id,
+                    'unique_name': name,
+                    'count': count,
+                }
+                for stock_id, name, count in self.select(cur, self.STOCK_TABLE)
+            }
 
-class Item(object):
 
-    def __init__(self, identifier):
-        self.identifier = identifier
+class SQLiteStockist(DatabaseStockist):
 
-    def __str__(self):
-        return str(self.identifier)
+    INSERT_SQL_STRING = "INSERT INTO {table} VALUES(?, ?, ?)"
+    UPDATE_SQL_STRING = "UPDATE {table} SET count=? where pk=?"
+    DELETE_SQL_STRING = "DELETE FROM {table} WHERE pk=?"
+
+    def __init__(self, database_url=None):
+        super(SQLiteStockist, self).__init__()
+        self.connection = sqlite3.connect(database_url)
+        self.memcon = sqlite3.connect(':memory:')
+    
+    @property
+    def connection(self):
+        connection = super(SQLiteStockist, self).connection
+        if connection.row_factory is None:
+            connection.row_factory = sqlite3.Row
+        return connection
+
+    @connection.setter
+    def connection(self, value):
+        if isinstance(value, sqlite3.Connection):
+            self._connection = value
+        else:
+            self._connection = sqlite3.connect(value) if value is not None else None
+    
+    @property 
+    def memcon(self):
+        if self._memcon is None:
+            self._memcon = sqlite3.connect(':memory:')
+        return self._memcon
+
+    @memcon.setter
+    def memcon(self, value):
+        if isinstance(value, sqlite3.Connection):
+            self._memcon = value
+        else:
+            self._memcon = sqlite3.connect(value) if value is not None else None
+
+    def export_stock_to_sql(self):
+        with self.memcon:
+            cur = self.memcon.cursor()
+            cur.execute(self.DROP_SQL_STRING.format(table=self.STOCK_TABLE))
+            cur.execute(self.CREATE_SQL_STRING.format(table=self.STOCK_TABLE))
+            cur.executemany(
+                self.INSERT_SQL_STRING.format(table=self.STOCK_TABLE),
+                self.create_stock_entries()
+            )
+            return '\n'.join(self.memcon.iterdump())
+
+
+class PostgreSQLStockist(DatabaseStockist):
+
+    INSERT_SQL_STRING = "INSERT INTO {table} VALUES (%s, %s, %s)"
+    UPDATE_SQL_STRING = "UPDATE {table} set count=%s where pk=%s"
+    DELETE_SQL_STRING = "DELETE FROM {table} WHERE pk=%s"
+
+    def __init__(self, database_url=None, database_name=None, username=None, password=None):
+        super(PostgreSQLStockist, self).__init__()
+        self.connection = psycopg2.connect(
+            database=database_name,
+            user=username,
+            password=password,
+        )
+    
+    @property
+    def connection(self):
+        return super(PostgreSQLStockist, self).connection
+
+    @connection.setter
+    def connection(self, value):
+        if isinstance(value, psycopg2.extensions.connection):
+            self._connection = value
+        elif value is None:
+            self._connection = None
+        else: 
+            raise ValueError
+
+    
