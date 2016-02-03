@@ -16,19 +16,38 @@ class StockConnectionError(StockError):
     pass
 
 
+def locked_method(method):
+    def wrapped(instance, *args, **kwargs):
+        if instance.is_locked:
+            raise StockLockedError
+        else:
+            return method(*args, **kwargs)
+    return wrapped
+
+
 class Stockist(object):
 
     @property
-    def items_locked(self):
-        if not hasattr(self, '_lock_items'):
-            self._lock_items = False
-        return self._lock_items
+    def stock_locked(self):
+        if not hasattr(self, '_lock_stock'):
+            self._lock_stock = False
+        return self._lock_stock
 
-    @items_locked.setter
-    def items_locked(self, value):
+    @stock_locked.setter
+    def stock_locked(self, value):
         if not isinstance(value, bool):
             raise ValueError
-        self._lock_items = value
+        self._lock_stock = value
+    
+    def lock_stock_list(self):
+        self.stock_locked = True
+    
+    def unlock_stock_list(self):
+        self.stock_locked = False
+    
+    @property
+    def is_locked(self):
+        return self.stock_locked
 
     @property 
     def stock(self):
@@ -42,16 +61,6 @@ class Stockist(object):
             self._name_id_map = collections.OrderedDict()
         return self._name_id_map
     
-    def lock_stock_list(self):
-        self.items_locked = True
-
-    def unlock_stock_list(self):
-        self.items_locked = False
-
-    @property
-    def is_locked(self):
-        return self.items_locked
-
     def stock_ids_for_item(self, item):
         return [stock_id for stock_id, _ in self.name_id_map.get(str(item), [])]
 
@@ -66,18 +75,15 @@ class Stockist(object):
             return self.stock[item_or_stock_id]
         return self.stock_for_item(item_or_stock_id)
 
+    @locked_method
     def __setitem__(self, item_or_stock_id, item):
-        if self.is_locked:
-            raise StockLockedError
+        if isinstance(item_or_stock_id, int):
+            self.new_stock_item(item, new_id=item_or_stock_id)
         else:
-            if isinstance(item_or_stock_id, int):
-                self.new_stock_item(item, new_id=item_or_stock_id)
-            else:
-                self.new_stock_item(item)
+            self.new_stock_item(item)
 
+    @locked_method
     def __delitem__(self, item_or_stock_id):
-        if self.is_locked:
-            raise StockLockedError
         if isinstance(item_or_stock_id, int):
             self.delete_stock_entry(item_or_stock_id)
         else:
@@ -131,18 +137,16 @@ class Stockist(object):
             self._next_free_stock_id += 1
         return self._next_free_stock_id
 
+    @locked_method
     def delete_stock_entry(self, old_id):
-        if self.is_locked:
-            raise StockLockedError
         data = self.stock[old_id]
         unique_name = data['unique_name']
         item_name, _ = unique_name.split('_#')
         self.name_id_map[item_name].discard((old_id, unique_name))
         del self.stock[old_id]
 
+    @locked_method
     def new_stock_item(self, item, new_id=None, force=False):
-        if self.is_locked:
-            raise StockLockedError
         if new_id is None:
             new_id = self.next_free_stock_id
         if new_id in self.stock:
@@ -193,6 +197,9 @@ class DatabaseStockist(Stockist):
 
     StockEntry = collections.namedtuple('StockEntry', ['pk', 'name', 'count'])
 
+    def __init__(self):
+        self._connection = None
+
     @property
     def connection(self):
         if self._connection is None:
@@ -208,9 +215,8 @@ class DatabaseStockist(Stockist):
         cur.execute(DatabaseStockist.SELECT_SQL_STRING.format(what=what, table=table_name))
         return cur.fetchall()
 
+    @locked_method
     def update_stock_from_db(self, force=False):
-        if self.is_locked:
-            raise StockLockedError
         if force or self.is_missing_stock_from_database:
             stock_data = self.database_stock
             for data in stock_data.values():
@@ -318,7 +324,6 @@ class DatabaseStockist(Stockist):
     def increase_stock(self, stock_id, amount=1, update_db=True):
         super(DatabaseStockist, self).increase_stock(stock_id, amount)
         if update_db:
-            print "trying..."
             with self.connection as connection:
                 cur = connection.cursor()
                 cur.execute(
@@ -347,16 +352,17 @@ class SQLiteStockist(DatabaseStockist):
     UPDATE_SQL_STRING = "UPDATE {table} SET count=? where pk=?"
     DELETE_SQL_STRING = "DELETE FROM {table} WHERE pk=?"
 
-    def __init__(self, database_url=None):
+    def __init__(self, database=None):
         super(SQLiteStockist, self).__init__()
-        self.connection = sqlite3.connect(database_url)
+        self.connection = database
         self.memcon = sqlite3.connect(':memory:')
     
     @property
     def connection(self):
         connection = super(SQLiteStockist, self).connection
-        if connection.row_factory is None:
-            connection.row_factory = sqlite3.Row
+        if connection is not None:
+            if connection.row_factory is None:
+                connection.row_factory = sqlite3.Row
         return connection
 
     @connection.setter
@@ -397,13 +403,14 @@ class PostgreSQLStockist(DatabaseStockist):
     UPDATE_SQL_STRING = "UPDATE {table} set count=%s where pk=%s"
     DELETE_SQL_STRING = "DELETE FROM {table} WHERE pk=%s"
 
-    def __init__(self, database_url=None, database_name=None, username=None, password=None):
+    def __init__(self, database=None, username=None, password=None):
         super(PostgreSQLStockist, self).__init__()
-        self.connection = psycopg2.connect(
-            database=database_name,
-            user=username,
-            password=password,
-        )
+        if database is not None:
+            self.connection = psycopg2.connect(
+                database=database,
+                user=username,
+                password=password,
+            )
     
     @property
     def connection(self):
@@ -418,4 +425,11 @@ class PostgreSQLStockist(DatabaseStockist):
         else: 
             raise ValueError
 
-    
+    def new_connection(self, database, username=None, password=None):
+        if self.connection is not None:
+            self.connection.close()
+        self.connection = psycopg2.connect(
+            database=database_name,
+            username=username,
+            password=password
+        )
