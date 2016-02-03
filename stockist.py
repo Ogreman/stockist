@@ -21,7 +21,7 @@ def locked_method(method):
         if instance.is_locked:
             raise StockLockedError
         else:
-            return method(*args, **kwargs)
+            return method(instance, *args, **kwargs)
     return wrapped
 
 
@@ -105,7 +105,7 @@ class Stockist(object):
         try:
             return self.stock.keys()[-1]
         except IndexError:
-            return -1
+            return None
     
     @property
     def last_stock_entry(self):
