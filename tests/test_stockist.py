@@ -217,26 +217,86 @@ class TestStockist(unittest.TestCase):
         self.stockist._name_id_map = {'test': set((1, 'test_#1'))}
         self.stockist._stock = {1: {'unique_name': 'test_#1'}}
         new_mock = mock.Mock(__str__= lambda _: "test")
+        self.assertRaises(stockist_module.StockError, self.stockist.item_stocked, None)
         self.assertTrue(self.stockist.item_stocked(1))
         self.assertTrue(self.stockist.item_stocked(new_mock))
         self.assertFalse(self.stockist.item_stocked(100))
-        self.assertRaises(stockist_module.StockError, self.stockist.item_stocked, None)
         self.assertFalse(self.stockist.item_stocked('not'))
+        self.assertFalse(self.stockist.item_stocked(-1))
 
     def test_item_in_stock(self):
-        pass
+        self.stockist._stock = {0: {'count': 0}, 1: {'count': 1}}
+        self.stockist._name_id_map = {'test': set([(0, 'test_#0'), (1, 'test_#1')])}
+        new_mock = mock.Mock(__str__= lambda _: "test")
+        self.assertRaises(stockist_module.StockError, self.stockist.item_in_stock, None)
+        self.assertFalse(self.stockist.item_in_stock(0))
+        self.assertFalse(self.stockist.item_in_stock(500))
+        self.assertTrue(self.stockist.item_in_stock(1))
+        self.assertTrue(self.stockist.item_in_stock(new_mock))
+        self.assertFalse(self.stockist.item_in_stock('not'))
+        self.assertFalse(self.stockist.item_in_stock(-1))
 
     def test_last_stock_id_for_item(self):
-        pass
+        self.stockist._name_id_map = {'test': set([(0, 'test_#0'), (1, 'test_#1')])}
+        new_mock = mock.Mock(__str__= lambda _: "test")
+        self.assertEqual(1, self.stockist.last_stock_id_for_item(new_mock))
+        self.assertIsNone(self.stockist.last_stock_id_for_item('not'))
+        self.assertIsNone(self.stockist.last_stock_id_for_item(1))
+        self.assertIsNone(self.stockist.last_stock_id_for_item(-1))
 
     def test_last_stock_entry_for_item(self):
-        pass
+        self.stockist._stock = {0: {'count': 0}, 1: {'count': 1}}
+        self.stockist._name_id_map = {'test': set([(0, 'test_#0'), (1, 'test_#1')])}
+        new_mock = mock.Mock(__str__= lambda _: "test")
+        self.assertEqual(
+            self.stockist._stock[1], 
+            self.stockist.last_stock_entry_for_item(new_mock)
+        )
+        self.assertIsNone(self.stockist.last_stock_entry_for_item('not'))
+        self.assertIsNone(self.stockist.last_stock_entry_for_item(1))
+        self.assertIsNone(self.stockist.last_stock_entry_for_item(-1))
 
     def test_stock_item(self):
-        pass
+        new_mock = mock.Mock(__str__= lambda _: "test")
+        self.stockist.item_stocked = mock.Mock(return_value=False)
+        self.stockist.new_stock_item = mock.Mock(return_value=0)
+        self.stockist.increase_stock = mock.Mock()
+        self.stockist.last_stock_id_for_item = mock.Mock(return_value=1)
+
+        self.assertEqual(0, self.stockist.stock_item(item=new_mock))
+        self.assertTrue(self.stockist.increase_stock.called)
+        self.stockist.new_stock_item.assert_called_with(new_mock, None)
+        self.stockist.item_stocked.assert_called_with(new_mock)
+
+        self.assertEqual(0, self.stockist.stock_item(item=new_mock, create=True))
+        self.stockist.new_stock_item.assert_called_with(new_mock, None)
+        
+        self.stockist.new_stock_item.return_value = 5
+        self.assertEqual(5, self.stockist.stock_item(item=new_mock, item_id=5))
+        self.stockist.new_stock_item.assert_called_with(new_mock, 5)
+
+        self.stockist.item_stocked.return_value = True
+        self.assertEqual(1, self.stockist.stock_item(item=new_mock))
+        self.assertEqual(500, self.stockist.stock_item(item=new_mock, item_id=500))
+        self.assertEqual(500, self.stockist.stock_item(item_id=500))
+
+        self.assertEqual(1, self.stockist.stock_item(item=new_mock, amount=5))
+        self.stockist.increase_stock.assert_called_with(1, 5)
 
     def test_increase_stock(self):
-        pass
+        self.assertRaises(KeyError, self.stockist.increase_stock, None)
+        self.assertRaises(KeyError, self.stockist.increase_stock, 0)
+        self.assertRaises(KeyError, self.stockist.increase_stock, -1)
+        self.assertRaises(KeyError, self.stockist.increase_stock, 'test')
+        self.stockist._stock = {0: {'count': 0}, 1: {'count': 1}}
+        self.stockist.increase_stock(0)
+        self.assertEqual(self.stockist._stock[0]['count'], 1)
+        self.stockist.increase_stock(0, amount=-1)
+        self.assertEqual(self.stockist._stock[0]['count'], 0)
+        self.stockist.increase_stock(0, amount=2)
+        self.assertEqual(self.stockist._stock[0]['count'], 2)
+        self.stockist.increase_stock(0, amount='test')
+        self.assertEqual(self.stockist._stock[0]['count'], 2)
 
 
 class TestDatabaseStockist(TestStockist):
@@ -334,6 +394,36 @@ class TestDatabaseStockist(TestStockist):
         self.assertTrue(self.stockist.create_item_data.called)
         self.assertIn((1, str(new_mock) + '_#1'), self.stockist._name_id_map[str(new_mock)])
         self.assertIn(1, self.stockist._stock)
+
+    def test_increase_stock(self):
+        self.assertRaises(KeyError, self.stockist.increase_stock, None)
+        self.assertRaises(KeyError, self.stockist.increase_stock, 0)
+        self.assertRaises(KeyError, self.stockist.increase_stock, -1)
+        self.assertRaises(KeyError, self.stockist.increase_stock, 'test')
+        self.stockist._stock = {0: {'count': 0}, 1: {'count': 1}}
+        self.stockist.increase_stock(0, update_db=False)
+        self.assertEqual(self.stockist._stock[0]['count'], 1)
+        self.stockist.increase_stock(0, amount=-1, update_db=False)
+        self.assertEqual(self.stockist._stock[0]['count'], 0)
+        self.stockist.increase_stock(0, amount=2, update_db=False)
+        self.assertEqual(self.stockist._stock[0]['count'], 2)
+        self.stockist.increase_stock(0, amount='test', update_db=False)
+        self.assertEqual(self.stockist._stock[0]['count'], 2)
+
+        if self.stockist.UPDATE_SQL_STRING is not None:
+            self.stockist._stock = {0: {'count': 0}, 1: {'count': 1}}
+            with mock.patch('stockist.DatabaseStockist.connection') as con:
+                cursor = mock.MagicMock(execute=mock.Mock())
+                connection = mock.MagicMock(cursor=lambda: cursor, commit=mock.Mock())
+                con.__enter__ = mock.Mock(return_value=connection)
+                self.stockist.increase_stock(0, update_db=True)
+            
+            expected = self.stockist.UPDATE_SQL_STRING.format(
+                table=self.stockist.STOCK_TABLE
+            )
+            cursor.execute.assert_called_with(expected, (1, 0))
+        else:
+            self.assertRaises(NotImplementedError, self.stockist.increase_stock, 0, update_db=True)
 
 
 class TestSQLiteStockist(TestDatabaseStockist):

@@ -175,7 +175,7 @@ class Stockist(object):
     def item_in_stock(self, item_or_stock_id):
         if isinstance(item_or_stock_id, int):
             try:
-                return bool(self.stock[item_id]['count'])
+                return bool(self.stock[item_or_stock_id]['count'])
             except KeyError:
                 return False
         elif item_or_stock_id is None:
@@ -207,7 +207,8 @@ class Stockist(object):
         return item_id
 
     def increase_stock(self, stock_id, amount=1):
-        self.stock[stock_id]['count'] += amount
+        if isinstance(amount, int):
+            self.stock[stock_id]['count'] += amount
 
 
 class DatabaseStockist(Stockist):
@@ -218,6 +219,7 @@ class DatabaseStockist(Stockist):
     SELECT_SQL_STRING = "SELECT {what} FROM {table};"
     INSERT_SQL_STRING = None
     DELETE_SQL_STRING = None
+    UPDATE_SQL_STRING = None
 
     StockEntry = collections.namedtuple('StockEntry', ['pk', 'name', 'count'])
 
@@ -351,6 +353,8 @@ class DatabaseStockist(Stockist):
 
     def increase_stock(self, stock_id, amount=1, update_db=True):
         super(DatabaseStockist, self).increase_stock(stock_id, amount)
+        if self.UPDATE_SQL_STRING is None and update_db:
+            raise NotImplementedError
         if update_db:
             with self.connection as connection:
                 cur = connection.cursor()
