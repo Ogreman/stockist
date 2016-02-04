@@ -245,8 +245,6 @@ class TestDatabaseStockist(TestStockist):
                 con.__enter__ = mock.Mock(return_value=connection)
                 self.stockist.delete_stock_entry(2, update_db=True)
 
-            self.assertNotIn(2, self.stockist._stock)
-            self.assertNotIn((2, 'test_#1'), self.stockist._name_id_map)
             expected = self.stockist.DELETE_SQL_STRING.format(
                 table=self.stockist.STOCK_TABLE
             )
