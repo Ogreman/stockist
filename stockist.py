@@ -62,7 +62,7 @@ class Stockist(object):
         return self._name_id_map
     
     def stock_ids_for_item(self, item):
-        return [stock_id for stock_id, _ in self.name_id_map.get(str(item), [])]
+        return [stock_id for stock_id, _ in self.name_id_map.get(str(item), set())]
 
     def stock_for_item(self, item):
         return [
@@ -194,6 +194,8 @@ class DatabaseStockist(Stockist):
     CREATE_SQL_STRING = "CREATE TABLE {table}(pk INT, name TEXT, count INT)"
     DROP_SQL_STRING = "DROP TABLE IF EXISTS {table}"
     SELECT_SQL_STRING = "SELECT {what} FROM {table};"
+    INSERT_SQL_STRING = None
+    DELETE_SQL_STRING = None
 
     StockEntry = collections.namedtuple('StockEntry', ['pk', 'name', 'count'])
 
@@ -300,7 +302,9 @@ class DatabaseStockist(Stockist):
 
     def new_stock_item(self, item, new_id=None, force=False, update_db=True):
         new_id = super(DatabaseStockist, self).new_stock_item(item, new_id, force)
-        if update_db:
+        if self.INSERT_SQL_STRING is None and update_db:
+            raise NotImplementedError
+        elif update_db:
             with self.connection as connection:
                 cur = connection.cursor()
                 cur.execute(
@@ -312,7 +316,9 @@ class DatabaseStockist(Stockist):
 
     def delete_stock_entry(self, old_id, update_db=True):
         super(DatabaseStockist, self).delete_stock_entry(old_id)
-        if update_db:
+        if self.DELETE_SQL_STRING is None and update_db:
+            raise NotImplementedError
+        elif update_db:
             with self.connection as connection:
                 cur = connection.cursor()
                 cur.execute(

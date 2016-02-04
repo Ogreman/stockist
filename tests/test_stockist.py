@@ -178,7 +178,12 @@ class TestStockist(unittest.TestCase):
         self.assertEqual(self.stockist.next_free_stock_id, i + 1)
 
     def test_delete_stock_entry(self):
-        pass
+        self.stockist._stock = {1: {'unique_name': 'test_#1'}}
+        self.stockist._name_id_map = {'test': set((1, 'test_#1'))}
+        self.stockist.delete_stock_entry(1)
+        self.assertNotIn(1, self.stockist._stock)
+        self.assertNotIn((1, 'test_#1'), self.stockist._name_id_map)
+        self.assertRaises(KeyError, self.stockist.delete_stock_entry, 255)
 
     def test_new_stock_item(self):
         pass
@@ -197,7 +202,7 @@ class TestStockist(unittest.TestCase):
 
     def test_stock_item(self):
         pass
-        
+
     def test_increase_stock(self):
         pass
 
@@ -218,6 +223,39 @@ class TestDatabaseStockist(TestStockist):
         self.assertIsInstance(self.stockist.is_database_up_to_date, bool)
         self.assertIsInstance(self.stockist.is_missing_stock_from_database, bool)
         self.assertIsInstance(self.stockist.database_stock, dict)      
+   
+    def test_delete_stock_entry(self):
+        self.stockist._stock = {1: {'unique_name': 'test_#1'}}
+        self.stockist._name_id_map = {'test': set((1, 'test_#1'))}
+        self.assertIn(1, self.stockist._stock)
+        self.stockist.delete_stock_entry(1, update_db=False)
+        self.assertNotIn(1, self.stockist._stock)
+        self.assertNotIn((1, 'test_#1'), self.stockist._name_id_map)
+
+        self.assertRaises(KeyError, self.stockist.delete_stock_entry, 255, update_db=False)
+        self.assertRaises(KeyError, self.stockist.delete_stock_entry, 256, update_db=True)
+        
+        self.stockist._stock = {2: {'unique_name': 'test_#2'}}
+        self.stockist._name_id_map = {'test': set((2, 'test_#2'))}
+
+        if self.stockist.DELETE_SQL_STRING is not None:
+            with mock.patch('stockist.DatabaseStockist.connection') as con:
+                cursor = mock.MagicMock(execute=mock.Mock())
+                connection = mock.MagicMock(cursor=lambda: cursor, commit=mock.Mock())
+                con.__enter__ = mock.Mock(return_value=connection)
+                self.stockist.delete_stock_entry(2, update_db=True)
+
+            self.assertNotIn(2, self.stockist._stock)
+            self.assertNotIn((2, 'test_#1'), self.stockist._name_id_map)
+            expected = self.stockist.DELETE_SQL_STRING.format(
+                table=self.stockist.STOCK_TABLE
+            )
+            cursor.execute.assert_called_with(expected, (2,))
+        else:
+            self.assertRaises(NotImplementedError, self.stockist.delete_stock_entry, 2, update_db=True)
+        
+        self.assertNotIn(2, self.stockist._stock)
+        self.assertNotIn((2, 'test_#2'), self.stockist._name_id_map)
 
 
 class TestSQLiteStockist(TestDatabaseStockist):
@@ -234,6 +272,8 @@ class TestPostgreSQLStockist(TestDatabaseStockist):
 
     def setUp(self):
         self.stockist = stockist_module.PostgreSQLStockist()
+
+    
 
 
 if __name__ == '__main__':
