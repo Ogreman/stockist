@@ -147,6 +147,8 @@ class Stockist(object):
 
     @locked_method
     def new_stock_item(self, item, new_id=None, force=False):
+        if item is None:
+            raise StockError('Unable to process NoneType!')
         if new_id is None:
             new_id = self.next_free_stock_id
         if new_id in self.stock:

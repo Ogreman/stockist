@@ -182,11 +182,32 @@ class TestStockist(unittest.TestCase):
         self.stockist._name_id_map = {'test': set((1, 'test_#1'))}
         self.stockist.delete_stock_entry(1)
         self.assertNotIn(1, self.stockist._stock)
-        self.assertNotIn((1, 'test_#1'), self.stockist._name_id_map)
+        self.assertNotIn((1, 'test_#1'), self.stockist._name_id_map['test'])
         self.assertRaises(KeyError, self.stockist.delete_stock_entry, 255)
 
     def test_new_stock_item(self):
-        pass
+        new_mock = mock.Mock(__str__= lambda _: "test")
+        self.stockist.create_item_data = mock.Mock(return_value={
+            'stock_id': 0,
+            'unique_name': str(new_mock) + '_#0',
+            'count': 0,
+        })
+        self.assertEqual(0, self.stockist.new_stock_item(new_mock))
+        self.assertTrue(self.stockist.create_item_data.called)
+        self.assertIn((0, str(new_mock) + '_#0'), self.stockist._name_id_map[str(new_mock)])
+        self.assertIn(0, self.stockist._stock)
+        
+        self.assertRaises(stockist_module.StockError, self.stockist.new_stock_item, None)
+        self.assertRaises(stockist_module.StockError, self.stockist.new_stock_item, new_mock, new_id=0)
+
+        self.stockist.delete_stock_entry = mock.Mock()
+        self.assertEqual(0, self.stockist.new_stock_item(new_mock, new_id=0, force=True))
+        self.assertEqual(1, len(self.stockist._stock))
+        self.assertTrue(self.stockist.delete_stock_entry.called)
+        self.assertEqual(1, len(self.stockist._name_id_map))
+        self.assertEqual(1, len(self.stockist._name_id_map[str(new_mock)]))
+        self.assertIn((0, str(new_mock) + '_#0'), self.stockist._name_id_map[str(new_mock)])
+        self.assertIn(0, self.stockist._stock)
 
     def test_list_stocked_item_ids(self):
         pass
@@ -230,7 +251,7 @@ class TestDatabaseStockist(TestStockist):
         self.assertIn(1, self.stockist._stock)
         self.stockist.delete_stock_entry(1, update_db=False)
         self.assertNotIn(1, self.stockist._stock)
-        self.assertNotIn((1, 'test_#1'), self.stockist._name_id_map)
+        self.assertNotIn((1, 'test_#1'), self.stockist._name_id_map['test'])
 
         self.assertRaises(KeyError, self.stockist.delete_stock_entry, 255, update_db=False)
         self.assertRaises(KeyError, self.stockist.delete_stock_entry, 256, update_db=True)
@@ -253,7 +274,55 @@ class TestDatabaseStockist(TestStockist):
             self.assertRaises(NotImplementedError, self.stockist.delete_stock_entry, 2, update_db=True)
         
         self.assertNotIn(2, self.stockist._stock)
-        self.assertNotIn((2, 'test_#2'), self.stockist._name_id_map)
+        self.assertNotIn((2, 'test_#2'), self.stockist._name_id_map['test'])
+
+    def test_new_stock_item(self):
+        new_mock = mock.Mock(__str__= lambda _: "test")
+        self.stockist.create_item_data = mock.Mock(return_value={
+            'stock_id': 0,
+            'unique_name': str(new_mock) + '_#0',
+            'count': 0,
+        })
+        self.assertEqual(0, self.stockist.new_stock_item(new_mock, update_db=False))
+        self.assertTrue(self.stockist.create_item_data.called)
+        self.assertIn((0, str(new_mock) + '_#0'), self.stockist._name_id_map[str(new_mock)])
+        self.assertIn(0, self.stockist._stock)
+        self.assertRaises(stockist_module.StockError, self.stockist.new_stock_item, None)
+        self.assertRaises(stockist_module.StockError, self.stockist.new_stock_item, new_mock, new_id=0)
+
+        self.stockist.delete_stock_entry = mock.Mock()
+        self.assertEqual(0, self.stockist.new_stock_item(new_mock, new_id=0, force=True, update_db=False))
+        self.assertEqual(1, len(self.stockist._stock))
+        self.assertTrue(self.stockist.delete_stock_entry.called)
+        self.assertEqual(1, len(self.stockist._name_id_map))
+        self.assertEqual(1, len(self.stockist._name_id_map[str(new_mock)]))
+        self.assertIn((0, str(new_mock) + '_#0'), self.stockist._name_id_map[str(new_mock)])
+        self.assertIn(0, self.stockist._stock)
+
+        self.stockist.create_item_data = mock.Mock(return_value={
+            'stock_id': 1,
+            'unique_name': str(new_mock) + '_#1',
+            'count': 0,
+        })
+        
+        if self.stockist.INSERT_SQL_STRING is not None:
+            self.stockist.create_stock_entry = mock.Mock(return_value=(1, str(new_mock) + '_#1', 0))
+            with mock.patch('stockist.DatabaseStockist.connection') as con:
+                cursor = mock.MagicMock(execute=mock.Mock())
+                connection = mock.MagicMock(cursor=lambda: cursor, commit=mock.Mock())
+                con.__enter__ = mock.Mock(return_value=connection)
+                self.assertEqual(1, self.stockist.new_stock_item(new_mock, update_db=True))
+            
+            expected = self.stockist.INSERT_SQL_STRING.format(
+                table=self.stockist.STOCK_TABLE
+            )
+            cursor.execute.assert_called_with(expected, (1, str(new_mock) + '_#1', 0))
+        else:
+            self.assertRaises(NotImplementedError, self.stockist.new_stock_item, new_mock, update_db=True)
+        
+        self.assertTrue(self.stockist.create_item_data.called)
+        self.assertIn((1, str(new_mock) + '_#1'), self.stockist._name_id_map[str(new_mock)])
+        self.assertIn(1, self.stockist._stock)
 
 
 class TestSQLiteStockist(TestDatabaseStockist):
