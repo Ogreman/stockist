@@ -210,9 +210,20 @@ class TestStockist(unittest.TestCase):
         self.assertIn(0, self.stockist._stock)
 
     def test_list_stocked_item_ids(self):
-        pass
+        self.stockist._stock = {0: {'count': 0}, 1: {'count':100}}
+        self.assertEqual([1], self.stockist.list_stocked_item_ids())
 
     def test_item_stocked(self):
+        self.stockist._name_id_map = {'test': set((1, 'test_#1'))}
+        self.stockist._stock = {1: {'unique_name': 'test_#1'}}
+        new_mock = mock.Mock(__str__= lambda _: "test")
+        self.assertTrue(self.stockist.item_stocked(1))
+        self.assertTrue(self.stockist.item_stocked(new_mock))
+        self.assertFalse(self.stockist.item_stocked(100))
+        self.assertRaises(stockist_module.StockError, self.stockist.item_stocked, None)
+        self.assertFalse(self.stockist.item_stocked('not'))
+
+    def test_item_in_stock(self):
         pass
 
     def test_last_stock_id_for_item(self):

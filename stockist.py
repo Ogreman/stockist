@@ -163,10 +163,30 @@ class Stockist(object):
         return new_id
 
     def list_stocked_item_ids(self):
-        return [_id for _id, count in self.stock_count if count > 0]
+        return [_id for _id, count in self.stock_count if count]
 
-    def item_stocked(self, item):
-        return str(item) in self.name_id_map
+    def item_stocked(self, item_or_stock_id):
+        if isinstance(item_or_stock_id, int):
+            return item_or_stock_id in self.stock
+        elif item_or_stock_id is None:
+            raise StockError('Unable to process NoneType!')
+        return str(item_or_stock_id) in self.name_id_map
+
+    def item_in_stock(self, item_or_stock_id):
+        if isinstance(item_or_stock_id, int):
+            try:
+                return bool(self.stock[item_id]['count'])
+            except KeyError:
+                return False
+        elif item_or_stock_id is None:
+            raise StockError('Unable to process NoneType!')
+        try:
+            return any(
+                self.stock[item_id]['count'] 
+                for item_id in self.stock_ids_for_item(item_or_stock_id)
+            )
+        except KeyError:
+            return False
 
     def last_stock_id_for_item(self, item):
         try:
