@@ -73,7 +73,9 @@ class Stockist(object):
     def __getitem__(self, item_or_stock_id):
         if isinstance(item_or_stock_id, int):
             return self.stock[item_or_stock_id]
-        return self.stock_for_item(item_or_stock_id)
+        if item_or_stock_id in self:
+            return self.stock_for_item(item_or_stock_id)
+        raise KeyError
 
     @locked_method
     def __setitem__(self, item_or_stock_id, item):
@@ -207,7 +209,7 @@ class Stockist(object):
         return item_id
 
     def increase_stock(self, stock_id, amount=1):
-        if isinstance(amount, int):
+        if isinstance(amount, int) and isinstance(stock_id, int):
             self.stock[stock_id]['count'] += amount
 
 
