@@ -216,7 +216,7 @@ class Stockist(object):
 class DatabaseStockist(Stockist):
 
     STOCK_TABLE = "stock"
-    CREATE_SQL_STRING = "CREATE TABLE {table}(pk INT, name TEXT, count INT)"
+    CREATE_SQL_STRING = "CREATE TABLE IF NOT EXISTS {table}(pk INT, name TEXT, count INT)"
     DROP_SQL_STRING = "DROP TABLE IF EXISTS {table}"
     SELECT_SQL_STRING = "SELECT {what} FROM {table};"
     INSERT_SQL_STRING = None
@@ -463,7 +463,7 @@ class PostgreSQLStockist(DatabaseStockist):
         if self.connection is not None:
             self.connection.close()
         self.connection = psycopg2.connect(
-            database=database_name,
+            database=database,
             username=username,
             password=password
         )

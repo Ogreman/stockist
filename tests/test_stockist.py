@@ -2,9 +2,8 @@ import unittest
 import mock
 import collections
 import sqlite3
-import sys; sys.path.append(sys.path[0] + '/../')
 
-import stockist as stockist_module
+import app.stockist as stockist_module
 
 
 class TestStockist(unittest.TestCase):
@@ -93,11 +92,9 @@ class TestStockist(unittest.TestCase):
         self.assertTrue(self.stockist.stock_ids_for_item.called)
 
     def test___getitem__(self):
-        self.stockist.stock[1] = mock.MagicMock(name="test_#1")
+        self.stockist[1] = 'test'
         self.assertEqual(self.stockist[1], self.stockist.stock[1])
-        self.stockist.stock_for_item = mock.Mock(return_value=-123)
-        self.assertEqual(self.stockist['test'], -123)
-        self.assertTrue(self.stockist.stock_for_item.called)
+        self.assertEqual(self.stockist['test'][0]['count'], 0)
         self.assertRaises(KeyError, self.stockist.__getitem__, 0)
 
     def test___setitem__(self):
@@ -118,18 +115,9 @@ class TestStockist(unittest.TestCase):
         self.stockist.delete_stock_entry.assert_called_with(2)
         
     def test___contains__(self):
-        old_method = collections.OrderedDict.__contains__
-        # some dangerous monkey-patching going on right here...
-        collections.OrderedDict.__contains__ = mock.Mock(return_value=1)
-
+        self.stockist[1] = 'test'
         self.assertTrue(1 in self.stockist)
-        collections.OrderedDict.__contains__.assert_called_with(1)
-
         self.assertTrue('test' in self.stockist)
-        collections.OrderedDict.__contains__.assert_called_with('test')
-
-        # make sure we set it back otherwise all hell may break loose.
-        collections.OrderedDict.__contains__ = old_method
 
     def test_stock_ids(self):
         self.stockist.stock.keys = mock.Mock()
@@ -284,10 +272,8 @@ class TestStockist(unittest.TestCase):
         self.stockist.increase_stock.assert_called_with(1, 5)
 
     def test_increase_stock(self):
-        self.assertRaises(KeyError, self.stockist.increase_stock, None)
         self.assertRaises(KeyError, self.stockist.increase_stock, 0)
         self.assertRaises(KeyError, self.stockist.increase_stock, -1)
-        self.assertRaises(KeyError, self.stockist.increase_stock, 'test')
         self.stockist._stock = {0: {'count': 0}, 1: {'count': 1}}
         self.stockist.increase_stock(0)
         self.assertEqual(self.stockist._stock[0]['count'], 1)
@@ -303,7 +289,15 @@ class TestDatabaseStockist(TestStockist):
 
     def setUp(self):
         self.stockist = stockist_module.DatabaseStockist()
-
+    
+    def test___contains__(self):
+        with self.assertRaises(NotImplementedError):
+            super(TestDatabaseStockist, self).test___contains__()
+    
+    def test___getitem__(self):
+        with self.assertRaises(NotImplementedError):
+            super(TestDatabaseStockist, self).test___getitem__()
+    
     def test_locked_methods(self):
         super(TestDatabaseStockist, self).test_locked_methods()
         self.assertRaises(stockist_module.StockLockedError, self.stockist.update_stock_from_db)
@@ -331,7 +325,7 @@ class TestDatabaseStockist(TestStockist):
         self.stockist._name_id_map = {'test': set((2, 'test_#2'))}
 
         if self.stockist.DELETE_SQL_STRING is not None:
-            with mock.patch('stockist.DatabaseStockist.connection') as con:
+            with mock.patch('app.stockist.DatabaseStockist.connection') as con:
                 cursor = mock.MagicMock(execute=mock.Mock())
                 connection = mock.MagicMock(cursor=lambda: cursor, commit=mock.Mock())
                 con.__enter__ = mock.Mock(return_value=connection)
@@ -378,7 +372,7 @@ class TestDatabaseStockist(TestStockist):
         
         if self.stockist.INSERT_SQL_STRING is not None:
             self.stockist.create_stock_entry = mock.Mock(return_value=(1, str(new_mock) + '_#1', 0))
-            with mock.patch('stockist.DatabaseStockist.connection') as con:
+            with mock.patch('app.stockist.DatabaseStockist.connection') as con:
                 cursor = mock.MagicMock(execute=mock.Mock())
                 connection = mock.MagicMock(cursor=lambda: cursor, commit=mock.Mock())
                 con.__enter__ = mock.Mock(return_value=connection)
@@ -396,10 +390,8 @@ class TestDatabaseStockist(TestStockist):
         self.assertIn(1, self.stockist._stock)
 
     def test_increase_stock(self):
-        self.assertRaises(KeyError, self.stockist.increase_stock, None)
         self.assertRaises(KeyError, self.stockist.increase_stock, 0)
         self.assertRaises(KeyError, self.stockist.increase_stock, -1)
-        self.assertRaises(KeyError, self.stockist.increase_stock, 'test')
         self.stockist._stock = {0: {'count': 0}, 1: {'count': 1}}
         self.stockist.increase_stock(0, update_db=False)
         self.assertEqual(self.stockist._stock[0]['count'], 1)
@@ -412,7 +404,7 @@ class TestDatabaseStockist(TestStockist):
 
         if self.stockist.UPDATE_SQL_STRING is not None:
             self.stockist._stock = {0: {'count': 0}, 1: {'count': 1}}
-            with mock.patch('stockist.DatabaseStockist.connection') as con:
+            with mock.patch('app.stockist.DatabaseStockist.connection') as con:
                 cursor = mock.MagicMock(execute=mock.Mock())
                 connection = mock.MagicMock(cursor=lambda: cursor, commit=mock.Mock())
                 con.__enter__ = mock.Mock(return_value=connection)
@@ -431,6 +423,14 @@ class TestSQLiteStockist(TestDatabaseStockist):
     def setUp(self):
         self.stockist = stockist_module.SQLiteStockist()
     
+    def test___contains__(self):
+        with self.assertRaises(stockist_module.StockConnectionError):
+            return super(TestSQLiteStockist, self).test___contains__()
+    
+    def test___getitem__(self):
+        with self.assertRaises(stockist_module.StockConnectionError):
+            return super(TestSQLiteStockist, self).test___getitem__()
+    
     def test_attributes(self):
         super(TestSQLiteStockist, self).test_attributes()
         self.assertIsInstance(self.stockist.memcon, sqlite3.Connection)
@@ -441,8 +441,14 @@ class TestPostgreSQLStockist(TestDatabaseStockist):
     def setUp(self):
         self.stockist = stockist_module.PostgreSQLStockist()
 
+    def test___contains__(self):
+        with self.assertRaises(stockist_module.StockConnectionError):
+            return super(TestPostgreSQLStockist, self).test___contains__()
     
-
+    def test___getitem__(self):
+        with self.assertRaises(stockist_module.StockConnectionError):
+            return super(TestPostgreSQLStockist, self).test___getitem__()
+    
 
 if __name__ == '__main__':
     unittest.main()

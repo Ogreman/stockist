@@ -1,7 +1,7 @@
 # click app exercising the various components
 import os
 import click
-import stockist
+from app import stockist
 
 
 class Config(object):
@@ -10,7 +10,7 @@ class Config(object):
         self.verbose = False
         self.debug = False
         self.silent = False
-        self.default_database = None
+        self.default_database = ".stockist.db"
         self.default_verbose = False
         self.default_debug = False
         self.default_silent = False
@@ -100,12 +100,18 @@ def cli(config, verbose, debug, silent, database, lock):
     config.silent = silent | bool(config.default_silent)
     config.stock = stockist.SQLiteStockist(database or config.default_database)
     try:
+        config.stock.create_database()
         config.stock.update_stock_from_db()
         config.stock.stock_locked = lock | bool(config.default_lock)
     except stockist.StockError:
         click.secho('No database!', fg="red")
 
     if debug or config.default_debug:
+        click.secho(
+            'Database set to {0}.'
+            .format(database or config.default_database),
+            fg="cyan"
+        )
         click.secho(
             'Verbose set to {0}.'
             .format(config.verbose), 
@@ -134,6 +140,15 @@ def set(config, name, value):
 @pass_config
 def reset(config):
     config.reset_defaults()
+
+
+@cli.command()
+@pass_config
+def clear(config):
+    if click.confirm('Clear all stock?'):
+        config.stock.reset_database()
+        if config.verbose:
+            click.echo('Cleared.')
 
 
 @cli.command()
@@ -231,14 +246,17 @@ def remove(config, name_or_id, amount, delete_if_zero=False):
             config.stock.increase_stock(key, amount)
             if config.stock[key]['count'] < 1 and delete_if_zero:
                 del config.stock[key]
+                if config.verbose:
+                    click.echo('Deleted.')
             elif config.verbose:
                 click.echo(config.stock[key]['unique_name'] + ": " + str(config.stock[key]['count']))
         except KeyError:
             click.secho('Not found.', fg="red")
         except stockist.StockLockedError:
             click.secho('Locked.', fg="red")
+    elif config.verbose:
+        click.echo('Not present.')
     
-
 
 @cli.command()
 @click.argument('name-or-id')

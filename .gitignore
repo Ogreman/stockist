@@ -1,0 +1,9 @@
+*.db
+*.pyc
+**/bin/
+**/include/
+**/lib/
+*.egg-info
+.python-version
+**/.vscode/
+pyvenv.cfg
